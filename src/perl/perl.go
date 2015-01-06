@@ -8,6 +8,9 @@ package perl
 extern char **environ;
 EXTERN_C void boot_DynaLoader (pTHX_ CV* cv);
 
+#define _PIARG PerlInterpreter *interp
+#define _PSETC PERL_SET_CONTEXT(interp)
+
 static void _xs_init(PTHX)
 {
     char *file = __FILE__;
@@ -34,18 +37,17 @@ static int _perl_can_cache(void)
     return PERL_VERSION > 14;
 }
 
-static void _interp_construct(PerlInterpreter *interp)
+static void _interp_construct(_PIARG)
 {
     char *args[] = { "", "-e", "0" };
 
-    PERL_SET_CONTEXT(interp);
+    _PSETC;
     perl_construct(interp);
-    PERL_SET_CONTEXT(interp);
     perl_parse(interp, _xs_init, 3, args, NULL);
     perl_run(interp);
 }
 
-static void _interp_destruct(PerlInterpreter *interp)
+static void _interp_destruct(_PIARG)
 {
     PERL_SET_CONTEXT(interp);
     perl_destruct(interp);
@@ -62,49 +64,9 @@ static PerlInterpreter *_interp_new(void)
     return interp;
 }
 
-static void _interp_set_context(PerlInterpreter *interp)
+static void _interp_set_context(_PIARG)
 {
-    PERL_SET_CONTEXT(interp);
-}
-
-static void _interp_eval(PerlInterpreter *interp, char *str)
-{
-    PERL_SET_CONTEXT(interp);
-    eval_pv(str, 1);
-}
-
-static HV *_hv_new(PerlInterpreter *interp)
-{
-    PERL_SET_CONTEXT(interp);
-    return newHV();
-}
-
-static void _hv_decref(PerlInterpreter *interp, HV *hv)
-{
-    PERL_SET_CONTEXT(interp);
-    SvREFCNT_dec(hv);
-}
-
-static int _hv_store_str(PerlInterpreter *interp, HV *hv, char *key, char *val)
-{
-    SV *value;
-    SV **sv_ptr;
-
-    PERL_SET_CONTEXT(interp);
-    value = newSVpv(val, strlen(val));
-    if (value == NULL)
-    {
-        return -1;
-    }
-
-    // steals reference to value unless it returns NULL
-    sv_ptr = hv_store(hv, key, strlen(key), value, 0);
-    if (sv_ptr == NULL)
-    {
-        SvREFCNT_dec(value);
-        return -1;
-    }
-    return 0;
+    _PSETC;
 }
 
 */
@@ -114,19 +76,14 @@ import (
     "os"
     "runtime"
     "strconv"
-    "unsafe"
 )
 
-type PerlInterpreter struct {
-    interp *C.struct_interpreter
-}
-
-type PerlHV struct {
-    hv *C.struct_hv
+type Interpreter struct {
+    my_perl *C.struct_interpreter
 }
 
 var doCache bool = true
-var interpreters chan *PerlInterpreter
+var interpreters chan *Interpreter
 
 func init() {
     var max_interps int
@@ -142,15 +99,15 @@ func init() {
     if max_interps <= 0 {
        max_interps = runtime.NumCPU()
     }
-    interpreters = make(chan *PerlInterpreter, max_interps)
+    interpreters = make(chan *Interpreter, max_interps)
     C._perl_init()
     if (doCache) {
        doCache = C._perl_can_cache() != 0
     }
 }
 
-func doneWithInterpreter(interp *PerlInterpreter) {
-    C._interp_destruct(interp.interp)
+func doneWithInterpreter(interp *Interpreter) {
+    C._interp_destruct(interp.my_perl)
     if (doCache) {
         for {
             select {
@@ -161,53 +118,25 @@ func doneWithInterpreter(interp *PerlInterpreter) {
             break
         }
     }
-    C.perl_free(interp.interp)
+    C.perl_free(interp.my_perl)
 }
 
-func getInterpreter() *PerlInterpreter {
+func getInterpreter() *Interpreter {
     for {
         select {
 
         case interp := <- interpreters:
-            C._interp_construct(interp.interp)
+            C._interp_construct(interp.my_perl)
             return interp
 
         default:
-            return &PerlInterpreter{interp: C._interp_new()}
+            return &Interpreter{my_perl: C._interp_new()}
         }
     }
 }
 
-func WithInterpreter(fn func(*PerlInterpreter)) {
+func WithInterpreter(fn func(*Interpreter)) {
     interp := getInterpreter()
     defer doneWithInterpreter(interp)
     fn(interp)
-}
-
-func (interp *PerlInterpreter) Eval(s string) {
-    cs := C.CString(s)
-    defer C.free(unsafe.Pointer(cs))
-    C._interp_eval(interp.interp, cs)
-}
-
-func (interp *PerlInterpreter) doneWithHV(hv *PerlHV) {
-    C._hv_decref(interp.interp, hv.hv)
-}
-
-func (interp *PerlInterpreter) HVFromStringMap(m map[string]string) *PerlHV {
-    chv := C._hv_new(interp.interp);
-
-    for key, val := range(m) {
-        ckey, cval := C.CString(key), C.CString(val)
-        defer C.free(unsafe.Pointer(ckey))
-        defer C.free(unsafe.Pointer(cval))
-        if (C._hv_store_str(interp.interp, chv, ckey, cval) < 0) {
-            C._hv_decref(interp.interp, chv)
-            return nil
-        }
-    }
-
-    hv := &PerlHV{hv: chv}
-    runtime.SetFinalizer(hv, interp.doneWithHV)
-    return hv
 }
