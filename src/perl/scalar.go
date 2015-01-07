@@ -50,6 +50,41 @@ static SV *_newSV_from_sv(_PIARG, SV *sv)
     return newSVsv(sv);
 }
 
+static int _SV_type(SV *sv)
+{
+    return SvTYPE(sv);
+}
+
+static int _SV_is_string(_PIARG, SV *sv)
+{
+    _PSETC;
+    return SvPOK(sv);
+}
+
+static char *_SV_as_string(_PIARG, SV *sv, int *len)
+{
+    STRLEN l;
+    char *str;
+
+    _PSETC;
+    str = SvPV(sv, l);
+    if (len)
+        *len = (int)l;
+    return str;
+}
+
+static int _SV_as_int(_PIARG, SV *sv)
+{
+    _PSETC;
+    return SvIV(sv);
+}
+
+static double _SV_as_double(_PIARG, SV *sv)
+{
+    _PSETC;
+    return SvNV(sv);
+}
+
 */
 import "C"
 
@@ -85,6 +120,10 @@ func (scalar *Scalar) String() string {
 
 func (scalar *Scalar) Done() {
     C._SV_decref(scalar.my_perl, scalar.sv)
+}
+
+func (scalar *Scalar) Val() interface{} {
+    return scalar.val
 }
 
 func (interp *Interpreter) NewScalar(arg interface{}) *Scalar {
@@ -125,4 +164,28 @@ func (interp *Interpreter) NewScalar(arg interface{}) *Scalar {
     }
 
     return &Scalar{my_perl: my_perl, val: arg, stype: stype, sv: sv}
+}
+
+func (interp *Interpreter) ScalarFromSV(sv *C.struct_sv) *Scalar {
+    my_perl := interp.my_perl
+    var val interface{}
+    var stype ScalarType
+    switch C._SV_type(sv) {
+        case C.SVt_PV:
+            var len C.int
+            tmp := C._SV_as_string(my_perl, sv, &len)
+            val = C.GoStringN(tmp, len)
+            stype = SCALAR_TYPE_STRING
+        case C.SVt_IV:
+            val = int(C._SV_as_int(my_perl, sv))
+            stype = SCALAR_TYPE_INT
+        case C.SVt_NV:
+            val = float64(C._SV_as_double(my_perl, sv))
+            stype = SCALAR_TYPE_DOUBLE
+        default:
+            fmt.Printf("Unsupported SV type: %v\n", sv)
+            return nil
+    }
+    C._SV_incref(my_perl, sv)
+    return &Scalar{my_perl: my_perl, val: val, stype: stype, sv: sv}
 }

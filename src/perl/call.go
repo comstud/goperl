@@ -8,11 +8,43 @@ package perl
 #define _PIARG PerlInterpreter *interp
 #define _PSETC PERL_SET_CONTEXT(interp)
 
-static SV **_interp_call(_PIARG, char *name, SV **svs, int flags)
+typedef struct _call_response
+{
+    SV *err_sv;
+    int count;
+    SV **results;
+} _CallResponse;
+
+static void _free_callresponse(_CallResponse *cr)
+{
+    int i;
+    return;
+
+    if (cr == NULL)
+    {
+        return;
+    }
+
+    if (cr->err_sv != NULL)
+    {
+        SvREFCNT_dec(cr->err_sv);
+    }
+
+    for (i = 0;i < cr->count;i++)
+    {
+        SvREFCNT_dec(cr->results[i]);
+    }
+
+    free(cr);
+}
+
+static _CallResponse *_interp_call(_PIARG, char *name, SV **svs, int flags)
 {
     SV **sv_ptr;
     SV *sv;
+    int ret;
     int count;
+    _CallResponse *cr;
 
     _PSETC;
     dSP;
@@ -29,26 +61,42 @@ static SV **_interp_call(_PIARG, char *name, SV **svs, int flags)
 
     count = perl_call_pv(name, flags | G_EVAL);
 
+    // malloc enough memory to hold the CallResponse struct as well as
+    // all of the SV pointers
+    cr = malloc(sizeof(*cr) + ((count > 0 ? count + 1 : 1) * sizeof(SV *)));
+    if (cr == NULL)
+    {
+        return NULL;
+    }
+
+    cr->err_sv = NULL;
+    cr->results = (SV **)(cr + 1); // point to after struct
+    cr->count = count;
+
     SPAGAIN;
 
     // TODO: handle returning errors and data
 
     if (SvTRUE(ERRSV))
     {
-        printf("Got error: %s\n", SvPV_nolen(ERRSV));
+        cr->err_sv = newSVsv(ERRSV);
     }
 
-    for(;count > 0;--count)
+    // Results are popped off stack in reverse order
+    sv_ptr = cr->results + count;
+    // Technically don't need to NULL terminate
+    *sv_ptr-- = NULL;
+
+    for(;count > 0;--count,--sv_ptr)
     {
-        // NOTE: Must INCREF sv if we keep it
-        sv = POPs;
+        *sv_ptr = newSVsv(POPs);
     }
 
     PUTBACK;
     FREETMPS;
     LEAVE;
 
-    return NULL;
+    return cr;
 }
 
 static void _interp_eval(_PIARG, char *str)
@@ -61,6 +109,7 @@ static void _interp_eval(_PIARG, char *str)
 import "C"
 
 import (
+    "fmt"
     "unsafe"
 )
 
@@ -80,8 +129,34 @@ func (interp *Interpreter) call(name string, mode C.int, args []interface{}) []*
     cs := C.CString(name) 
     defer C.free(unsafe.Pointer(cs))
 
-    C._interp_call(my_perl, cs, &sv_arr[0], mode)
-    return []*Scalar{}
+    res := C._interp_call(my_perl, cs, &sv_arr[0], mode)
+    if res == nil {
+        panic("perl call failed miserably")
+    }
+
+    defer C._free_callresponse(res)
+
+    if res.err_sv != nil {
+        scalar := interp.ScalarFromSV(res.err_sv)
+        fmt.Printf("Got error Scalar: %v\n", scalar)
+        scalar.Done()
+        return nil
+    }
+
+    count := int(res.count)
+    ptrSz := unsafe.Sizeof(*res.results)
+    results := uintptr(unsafe.Pointer(res.results))
+
+    var scalars []*Scalar
+    var sv_ptr **C.SV
+    
+    for i := 0; i < count; i++ {
+        sv_ptr = (**C.SV)(unsafe.Pointer(results))
+        scalars = append(scalars, interp.ScalarFromSV(*sv_ptr))
+        results += uintptr(ptrSz)
+    }
+
+    return scalars
 }
 
 func (interp *Interpreter) CallAsScalar(name string, args ...interface{}) *Scalar {

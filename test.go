@@ -17,9 +17,12 @@ func perlHelloWorld(iter int, done_chan chan int) {
         sv_d2 := i.NewScalar(float64(2.2))
         defer sv_d2.Done()
         sv_str := i.NewScalar("wat")
-        i.CallAsScalar("kjsfd")
-        i.CallAsScalar("do_it", sv_iter, sv_d1, sv_d2, sv_str, "scalar_mode")
-        i.CallAsArray("do_it", sv_iter, sv_d1, sv_d2, sv_str, "array_mode")
+        s := i.CallAsScalar("kjsfd")
+        fmt.Printf("Scalar result: %v\n", s)
+        s = i.CallAsScalar("do_it", sv_iter, sv_d1, sv_d2, sv_str, "scalar_mode")
+        fmt.Printf("Scalar result: %v\n", s)
+        res := i.CallAsArray("do_it", sv_iter, sv_d1, sv_d2, sv_str, "array_mode")
+        fmt.Printf("Array result: %v\n", res)
     })
     done_chan <- 1
 }
