@@ -54,7 +54,35 @@ static _CallResponse *_interp_call(_PIARG, char *name, SV **svs, int flags)
 
     for (sv_ptr=svs;sv = *sv_ptr;sv_ptr++)
     {
-       XPUSHs(sv);
+       if (SvTYPE(sv) == SVt_PVHV)
+       {
+           // expand hashes
+           HE *he;
+           HV *hv = (HV *)sv;
+           SV *he_sv;
+
+           hv_iterinit(hv);
+           while ((he = hv_iternext(hv)) != NULL)
+           {
+               XPUSHs(sv_mortalcopy(HeSVKEY_force(he)));
+               XPUSHs(sv_mortalcopy(HeVAL(he)));
+           }
+       }
+       else if (SvTYPE(sv) == SVt_PVAV)
+       {
+           AV *av = (AV *)sv;
+           SSize_t i;
+           SSize_t top_index = av_top_index(av);
+
+           for(i=0;i<=top_index;i++)
+           {
+               XPUSHs(sv_mortalcopy(*av_fetch(av, i, 0)));
+           }
+       }
+       else
+       {
+           XPUSHs(sv);
+       }
     }
 
     PUTBACK;
@@ -113,15 +141,14 @@ import (
     "unsafe"
 )
 
-func (interp *Interpreter) call(name string, mode C.int, args []interface{}) []*Scalar {
+func (interp *Interpreter) call(name string, mode C.int, args []interface{}) []*Obj {
     my_perl := interp.my_perl
 
     var sv_arr []*C.SV
 
     for _, arg := range(args) {
-        scalar := interp.NewScalar(arg)
-        defer scalar.Done()
-        sv_arr = append(sv_arr, scalar.sv)
+        obj := interp.ObjFromGo(arg)
+        sv_arr = append(sv_arr, obj.sv)
     }
 
     sv_arr = append(sv_arr, nil)
@@ -137,9 +164,8 @@ func (interp *Interpreter) call(name string, mode C.int, args []interface{}) []*
     defer C._free_callresponse(res)
 
     if res.err_sv != nil {
-        scalar := interp.ScalarFromSV(res.err_sv)
-        fmt.Printf("Got error Scalar: %v\n", scalar)
-        scalar.Done()
+        obj := interp.ObjFromPerl(res.err_sv)
+        fmt.Printf("Got error from perl: %v\n", obj)
         return nil
     }
 
@@ -147,19 +173,19 @@ func (interp *Interpreter) call(name string, mode C.int, args []interface{}) []*
     ptrSz := unsafe.Sizeof(*res.results)
     results := uintptr(unsafe.Pointer(res.results))
 
-    var scalars []*Scalar
+    var objects []*Obj
     var sv_ptr **C.SV
     
     for i := 0; i < count; i++ {
         sv_ptr = (**C.SV)(unsafe.Pointer(results))
-        scalars = append(scalars, interp.ScalarFromSV(*sv_ptr))
+        objects = append(objects, interp.ObjFromPerl(*sv_ptr))
         results += uintptr(ptrSz)
     }
 
-    return scalars
+    return objects
 }
 
-func (interp *Interpreter) CallAsScalar(name string, args ...interface{}) *Scalar {
+func (interp *Interpreter) CallAsScalar(name string, args ...interface{}) *Obj {
     results := interp.call(name, C.G_SCALAR, args)
     if len(results) > 0 {
         return results[0]
@@ -167,7 +193,7 @@ func (interp *Interpreter) CallAsScalar(name string, args ...interface{}) *Scala
     return nil
 }
 
-func (interp *Interpreter) CallAsArray(name string, args ...interface{}) []*Scalar {
+func (interp *Interpreter) CallAsArray(name string, args ...interface{}) []*Obj {
     return interp.call(name, C.G_ARRAY, args)
 }
 

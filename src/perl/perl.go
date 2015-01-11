@@ -121,22 +121,14 @@ func doneWithInterpreter(interp *Interpreter) {
     C.perl_free(interp.my_perl)
 }
 
-func getInterpreter() *Interpreter {
-    for {
-        select {
-
-        case interp := <- interpreters:
+func GetInterpreter() *Interpreter {
+    var interp *Interpreter
+    select {
+        case interp = <- interpreters:
             C._interp_construct(interp.my_perl)
-            return interp
-
         default:
-            return &Interpreter{my_perl: C._interp_new()}
-        }
+            interp = &Interpreter{my_perl: C._interp_new()}
     }
-}
-
-func WithInterpreter(fn func(*Interpreter)) {
-    interp := getInterpreter()
-    defer doneWithInterpreter(interp)
-    fn(interp)
+    runtime.SetFinalizer(interp, doneWithInterpreter)
+    return interp
 }
