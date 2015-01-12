@@ -72,7 +72,12 @@ static _CallResponse *_interp_call(_PIARG, char *name, SV **svs, int flags)
        {
            AV *av = (AV *)sv;
            SSize_t i;
+           // See comment in object.go:_av_top_index
+#ifdef av_top_index
            SSize_t top_index = av_top_index(av);
+#else
+           SSize_t top_index = av_len(av);
+#endif
 
            for(i=0;i<=top_index;i++)
            {
@@ -127,10 +132,40 @@ static _CallResponse *_interp_call(_PIARG, char *name, SV **svs, int flags)
     return cr;
 }
 
-static void _interp_eval(_PIARG, char *str)
+static _CallResponse *_interp_eval(_PIARG, char *str)
 {
+    _CallResponse *cr;
+    SV *sv;
+
     _PSETC;
-    eval_pv(str, 1);
+
+    cr = malloc(sizeof(*cr) + (2 * sizeof(SV *)));
+    if (cr == NULL)
+    {
+        return NULL;
+    }
+    cr->err_sv = NULL;
+    cr->results = (SV **)(cr + 1); // point to after struct
+    cr->count = 0;
+
+    sv = eval_pv(str, 0);
+    if (SvTRUE(ERRSV))
+    {
+        cr->err_sv = newSVsv(ERRSV);
+    }
+
+    if (sv != NULL)
+    {
+        cr->count = 1;
+        cr->results[0] = newSVsv(sv);
+        cr->results[1] = NULL;
+    } 
+    else
+    {
+        cr->results[0] = NULL;
+    }
+
+    return cr;
 }
 
 */
@@ -197,8 +232,25 @@ func (interp *Interpreter) CallAsArray(name string, args ...interface{}) []*Obj 
     return interp.call(name, C.G_ARRAY, args)
 }
 
-func (interp *Interpreter) Eval(s string) {
+func (interp *Interpreter) Eval(s string) *Obj {
     cs := C.CString(s)
     defer C.free(unsafe.Pointer(cs))
-    C._interp_eval(interp.my_perl, cs)
+
+    res := C._interp_eval(interp.my_perl, cs)
+    if res == nil {
+        panic("perl eval failed miserably")
+    }
+    defer C._free_callresponse(res)
+
+    if res.err_sv != nil {
+        obj := interp.ObjFromPerl(res.err_sv)
+        fmt.Printf("Got error from perl: %v\n", obj)
+        return nil
+    }
+
+    if res.count < 1 {
+        return nil
+    }
+
+    return interp.ObjFromPerl(*res.results)
 }

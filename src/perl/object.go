@@ -191,7 +191,14 @@ static int _av_store(_PIARG, AV *av, SSize_t index, SV *val)
 static SSize_t _av_top_index(_PIARG, AV *av)
 {
     _PSETC;
+    // These are the same. Apparently because av_len is confusing in
+    // that it returns the top index (and not the actual length), they
+    // added av_top_index. Prefer that.
+#ifdef av_top_index
     return av_top_index(av);
+#else
+    return av_len(av);
+#endif
 }
 
 static SV *_av_fetch(_PIARG, AV *av, SSize_t i)
@@ -226,6 +233,7 @@ func doneWithObj(obj *Obj) {
 func newObj(interp *Interpreter, sv *C.SV) *Obj {
     obj := &Obj{interp: interp, sv: sv}
     runtime.SetFinalizer(obj, doneWithObj)
+    C._SV_incref(interp.my_perl, sv)
     return obj
 }
 
@@ -339,6 +347,7 @@ func (obj *Obj) AsArray() []interface{} {
 func (obj *Obj) Ref() *Obj {
     my_perl := obj.interp.my_perl
     sv := C._newSV_ref(my_perl, obj.sv)
+    defer C._SV_decref(my_perl, sv)
     return newObj(obj.interp, sv)
 }
 
@@ -351,7 +360,6 @@ func (interp *Interpreter) objFromReflectValue(val reflect.Value) *Obj {
             i := val.Interface()
             switch ival := i.(type) {
                 case *Obj:
-                    C._SV_incref(my_perl, ival.sv)
                     return ival
             }
             return interp.objFromReflectValue(val.Elem()).Ref()
@@ -383,6 +391,8 @@ func (interp *Interpreter) objFromReflectValue(val reflect.Value) *Obj {
                    C._hv_decref(my_perl, hv)
                    panic("failed to add entry to perl hash")
                }
+               C._SV_incref(my_perl, keyobj.sv)
+               C._SV_incref(my_perl, valobj.sv)
             }
             sv = (*C.SV)(unsafe.Pointer(hv))
         case reflect.Array:
@@ -393,12 +403,13 @@ func (interp *Interpreter) objFromReflectValue(val reflect.Value) *Obj {
                     C._av_decref(my_perl, av)
                     panic("failed to add entry to perl array")
                 }
+                C._SV_incref(my_perl, valobj.sv)
             }
             sv = (*C.SV)(unsafe.Pointer(av))
         default:
             panic(fmt.Sprintf("Unsupported type for NewSV: %v\n", val))
     }
-
+    defer C._SV_decref(my_perl, sv)
     return newObj(interp, sv)
 }
 
@@ -407,6 +418,5 @@ func (interp *Interpreter) ObjFromGo(arg interface{}) *Obj {
 }
 
 func (interp *Interpreter) ObjFromPerl(sv *C.struct_sv) *Obj {
-    C._SV_incref(interp.my_perl, sv)
     return newObj(interp, sv)
 }
