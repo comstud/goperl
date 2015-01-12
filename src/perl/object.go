@@ -258,6 +258,8 @@ func svToGo(my_perl *C.struct_interpreter, sv *C.SV) interface{} {
         is_ref = false
     }
     switch C._SV_type(sv) {
+        case C.SVt_NULL:
+            i = nil
         case C.SVt_IV, C.SVt_PVIV:
             if C._SV_is_uint(my_perl, sv) != 0 {
                 i = uint(C._SV_as_int(my_perl, sv))
