@@ -207,6 +207,25 @@ static SV *_av_fetch(_PIARG, AV *av, SSize_t i)
     return *av_fetch(av, i, 0);
 }
 
+static void _hv_iterinit(_PIARG, HV *hv)
+{
+    _PSETC;
+    hv_iterinit(hv);
+}
+
+static HE *_hv_iternext(_PIARG, HV *hv)
+{
+    _PSETC;
+    return hv_iternext(hv);
+}
+
+static void _he_get_keyval(_PIARG, HE *he, SV **key_ret, SV **val_ret)
+{
+    _PSETC;
+    *key_ret = newSVsv(HeSVKEY_force(he));
+    *val_ret = newSVsv(HeVAL(he));
+}
+
 */
 import "C"
 
@@ -247,6 +266,30 @@ func avToGo(my_perl *C.struct_interpreter, av *C.AV) []interface{} {
     return iarr
 }
 
+func hvToGo(my_perl *C.struct_interpreter, hv *C.HV) map[interface{}]interface{} {
+    imap := make(map[interface{}]interface{})
+    C._hv_iterinit(my_perl, hv)
+    for {
+        he := C._hv_iternext(my_perl, hv)
+        if he == nil {
+            break
+        }
+
+        var key, val *C.SV
+
+        C._he_get_keyval(my_perl, he, &key, &val)
+        defer C._SV_decref(my_perl, key)
+        defer C._SV_decref(my_perl, val)
+
+        keyobj := svToGo(my_perl, key)
+        valobj := svToGo(my_perl, val)
+
+        imap[keyobj] = valobj
+    }
+
+    return imap
+}
+
 func svToGo(my_perl *C.struct_interpreter, sv *C.SV) interface{} {
     var i interface{}
     var is_ref bool
@@ -273,7 +316,8 @@ func svToGo(my_perl *C.struct_interpreter, sv *C.SV) interface{} {
             tmp := C._SV_as_string(my_perl, sv, &len)
             i = C.GoStringN(tmp, len)
         case C.SVt_PVHV:
-            i = "<HASH>"
+            hv := (*C.HV)(unsafe.Pointer(sv))
+            return hvToGo(my_perl, hv)
         case C.SVt_PVAV:
             av := (*C.AV)(unsafe.Pointer(sv))
             return avToGo(my_perl, av)
@@ -344,6 +388,24 @@ func (obj *Obj) AsArray() []interface{} {
 
     av := (*C.AV)(unsafe.Pointer(sv))
     return avToGo(my_perl, av)
+}
+
+func (obj *Obj) AsHash() map[interface{}]interface{} {
+    my_perl := obj.interp.my_perl
+    var sv *C.SV
+
+    if C._SV_is_ref(my_perl, obj.sv) != 0 {
+        sv = C._SV_deref(my_perl, obj.sv)
+    } else {
+        sv = obj.sv
+    }
+
+    if C._SV_type(sv) != C.SVt_PVHV {
+        panic("perl.Obj type not compatible with hash")
+    }
+
+    hv := (*C.HV)(unsafe.Pointer(sv))
+    return hvToGo(my_perl, hv)
 }
 
 func (obj *Obj) Ref() *Obj {

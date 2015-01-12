@@ -22,19 +22,19 @@ func testScalar(interp *perl.Interpreter) {
 }
 
 func testConvertHash(interp *perl.Interpreter) {
-    return
     m := map[string]*map[string]int{
         "cat": &map[string]int{"val": 1, "wat": 69},
         "cow": &map[string]int{"val2": 2, "wat": 69},
         "dog": &map[string]int{"val3": 3, "wat": 69},
     }
     obj := interp.ObjFromGo(m).Ref()
-    obj2 := interp.ObjFromGo(^uint64(0)).Ref()
-    res_arr := interp.CallAsArray("do_it", obj, obj2)
+    res_arr := interp.CallAsArray("do_it2", obj)
     fmt.Printf("Array result: %v\n", res_arr)
+    fmt.Printf("cat result: %v\n", res_arr[0].AsHash()["cat"])
 }
 
 func testConvertArray(interp *perl.Interpreter) {
+    return
     iarr := &[4]int{4, 2, 1, 5}
     obj := interp.ObjFromGo(iarr)
     res_arr := interp.CallAsArray("do_it", obj)
@@ -51,8 +51,8 @@ func perlHelloWorld(iter int, done_chan chan int) {
     str := `sub do_it { use Data::Dumper; print Dumper(@_); @_ }`
     interp.Eval(str)
 
-//  str = `sub do_it2 { use Data::Dumper; print Dumper(@_); @_ }`
-//  interp.Eval(str)
+    str = `sub do_it2 { @_ }`
+    interp.Eval(str)
 
     testScalar(interp)
     testArray(interp)
